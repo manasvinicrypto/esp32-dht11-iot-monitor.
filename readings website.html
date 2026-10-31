@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 Climate Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #070b16;
+    --panel: rgba(255, 255, 255, 0.05);
+    --panel-border: rgba(255, 255, 255, 0.10);
+    --text: #e8edf7;
+    --muted: #8b97ad;
+    --ok: #34d399;
+    --alert: #ff5470;
+    --temp: #ffa94d;
+    --hum: #38bdf8;
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: dark; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(900px 500px at 10% -10%, rgba(56, 189, 248, 0.18), transparent 60%),
+      radial-gradient(800px 500px at 100% 10%, rgba(255, 169, 77, 0.14), transparent 60%),
+      radial-gradient(700px 500px at 50% 120%, rgba(139, 92, 246, 0.16), transparent 60%),
+      var(--bg);
+    background-attachment: fixed;
+    padding: 32px 20px 48px;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+
+  header { text-align: center; margin-bottom: 34px; }
+  .live {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 14px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--panel-border);
+    font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .live.on .dot { background: var(--ok); box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); animation: pulse 2s infinite; }
+  .live.err .dot { background: var(--alert); }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); }
+    70% { box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+  }
+  h1 {
+    font-family: "Space Grotesk", "Inter", sans-serif;
+    font-size: clamp(2rem, 6vw, 3.2rem);
+    margin: 18px 0 8px; letter-spacing: -0.02em; line-height: 1.1;
+    background: linear-gradient(90deg, #ffd29a, #fff 45%, #8fdcff);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .subtitle { color: var(--muted); margin: 0; font-size: 1rem; }
+
+  .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+  .card {
+    --accent: var(--temp);
+    position: relative; overflow: hidden;
+    padding: 24px; border-radius: 24px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 20px 50px -25px rgba(0, 0, 0, 0.8);
+    transition: border-color .35s, box-shadow .35s, transform .35s;
+  }
+  .card:hover { transform: translateY(-3px); }
+  .card.hum { --accent: var(--hum); }
+  .card::before {
+    content: ""; position: absolute; inset: -40% -20% auto auto; width: 280px; height: 280px;
+    background: radial-gradient(circle, var(--accent), transparent 65%);
+    opacity: 0.16; pointer-events: none; transition: opacity .35s;
+  }
+  .card.high { --accent: var(--alert); border-color: rgba(255, 84, 112, 0.55); box-shadow: 0 0 0 1px rgba(255, 84, 112, 0.25), 0 20px 60px -20px rgba(255, 84, 112, 0.55); }
+  .card.high::before { opacity: 0.28; }
+
+  .card-top { display: flex; justify-content: space-between; align-items: center; position: relative; }
+  .label { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--muted); font-size: 0.95rem; }
+  .label svg { width: 22px; height: 22px; stroke: var(--accent); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: stroke .35s; }
+  .pill {
+    padding: 5px 12px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em;
+    background: rgba(52, 211, 153, 0.14); color: var(--ok); border: 1px solid rgba(52, 211, 153, 0.35);
+    transition: all .35s;
+  }
+  .pill.wait { background: rgba(255,255,255,0.06); color: var(--muted); border-color: var(--panel-border); }
+  .card.high .pill { background: rgba(255, 84, 112, 0.16); color: var(--alert); border-color: rgba(255, 84, 112, 0.5); animation: blink 1.4s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: 0.55; } }
+
+  .gauge-wrap { position: relative; width: 190px; height: 190px; margin: 22px auto 10px; }
+  .gauge-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring-bg { fill: none; stroke: rgba(255, 255, 255, 0.08); stroke-width: 10; }
+  .ring {
+    fill: none; stroke: var(--accent); stroke-width: 10; stroke-linecap: round;
+    stroke-dasharray: 339.292; stroke-dashoffset: 339.292;
+    transition: stroke-dashoffset 1s cubic-bezier(.2,.8,.2,1), stroke .35s;
+    filter: drop-shadow(0 0 6px var(--accent));
+  }
+  .gauge-center {
+    position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  .value { font-family: "Space Grotesk", "Inter", sans-serif; font-weight: 700; font-size: 2.9rem; line-height: 1; letter-spacing: -0.02em; }
+  .value small { font-size: 1.2rem; font-weight: 500; color: var(--muted); margin-left: 2px; }
+  .limit { color: var(--muted); font-size: 0.82rem; margin-top: 8px; }
+
+  .spark { position: relative; margin-top: 8px; height: 70px; }
+  .spark svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .spark-caption { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 6px; }
+
+  .settings {
+    margin-top: 20px; padding: 24px; border-radius: 24px;
+    background: var(--panel); border: 1px solid var(--panel-border);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  }
+  .settings h2 { margin: 0 0 18px; font-family: "Space Grotesk", "Inter", sans-serif; font-size: 1.1rem; }
+  .sliders { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+  .slider-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; font-weight: 500; color: var(--muted); font-size: 0.92rem; }
+  .slider-head output { color: var(--text); font-family: "Space Grotesk", "Inter", sans-serif; font-size: 1.15rem; font-weight: 700; }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 999px; outline: none;
+    background: rgba(255, 255, 255, 0.12);
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 22px; height: 22px; border-radius: 50%;
+    background: #fff; border: 4px solid var(--thumb, var(--temp)); cursor: pointer;
+    box-shadow: 0 0 14px var(--thumb, var(--temp));
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 4px solid var(--thumb, var(--temp)); cursor: pointer;
+  }
+  #tempThreshold { --thumb: var(--temp); }
+  #humidityThreshold { --thumb: var(--hum); }
+
+  .footer { margin-top: 24px; text-align: center; color: var(--muted); font-size: 0.85rem; line-height: 1.7; }
+  .footer .err { color: var(--alert); }
+
+  @media (max-width: 680px) {
+    body { padding: 22px 14px 36px; }
+    .cards, .sliders { grid-template-columns: 1fr; }
+    .sliders { gap: 22px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span id="live" class="live"><span class="dot"></span><span id="liveText">Connecting</span></span>
+    <h1>Climate Monitor</h1>
+    <p class="subtitle">Live temperature &amp; humidity from an ESP32 + DHT11, streamed through ThingSpeak</p>
+  </header>
+
+  <section class="cards">
+    <article id="tempCard" class="card temp">
+      <div class="card-top">
+        <div class="label">
+          <svg viewBox="0 0 24 24"><path d="M14 14.76V5a2 2 0 0 0-4 0v9.76a4 4 0 1 0 4 0z"/><path d="M12 9v7"/></svg>
+          Temperature
+        </div>
+        <span id="tempStatus" class="pill wait">WAITING</span>
+      </div>
+      <div class="gauge-wrap">
+        <svg viewBox="0 0 120 120"><circle class="ring-bg" cx="60" cy="60" r="54"/><circle id="tempRing" class="ring" cx="60" cy="60" r="54"/></svg>
+        <div class="gauge-center">
+          <div id="tempValue" class="value">--<small>°C</small></div>
+          <div id="tempLimit" class="limit">Limit 30 °C</div>
+        </div>
+      </div>
+      <div class="spark"><svg id="tempSpark" viewBox="0 0 300 70" preserveAspectRatio="none"></svg></div>
+      <div class="spark-caption">Recent readings</div>
+    </article>
+
+    <article id="humidityCard" class="card hum">
+      <div class="card-top">
+        <div class="label">
+          <svg viewBox="0 0 24 24"><path d="M12 2.7s6 6.3 6 10.8a6 6 0 0 1-12 0C6 9 12 2.7 12 2.7z"/></svg>
+          Humidity
+        </div>
+        <span id="humidityStatus" class="pill wait">WAITING</span>
+      </div>
+      <div class="gauge-wrap">
+        <svg viewBox="0 0 120 120"><circle class="ring-bg" cx="60" cy="60" r="54"/><circle id="humRing" class="ring" cx="60" cy="60" r="54"/></svg>
+        <div class="gauge-center">
+          <div id="humidityValue" class="value">--<small>%</small></div>
+          <div id="humidityLimit" class="limit">Limit 70 %</div>
+        </div>
+      </div>
+      <div class="spark"><svg id="humSpark" viewBox="0 0 300 70" preserveAspectRatio="none"></svg></div>
+      <div class="spark-caption">Recent readings</div>
+    </article>
+  </section>
+
+  <section class="settings">
+    <h2>Alert thresholds</h2>
+    <div class="sliders">
+      <div>
+        <div class="slider-head"><label for="tempThreshold">Temperature limit</label><output id="tempOut">30 °C</output></div>
+        <input id="tempThreshold" type="range" min="0" max="50" step="0.5" value="30">
+      </div>
+      <div>
+        <div class="slider-head"><label for="humidityThreshold">Humidity limit</label><output id="humOut">70 %</output></div>
+        <input id="humidityThreshold" type="range" min="0" max="100" step="1" value="70">
+      </div>
+    </div>
+  </section>
+
+  <p id="updated" class="footer">Connecting to ThingSpeak…</p>
+</main>
+
+<script>
+  // Replace with your ThingSpeak channel ID.
+  const CHANNEL_ID = "3547782";
+
+  // This simplest example expects the ThingSpeak channel to be Public.
+  // For a Private channel, add a Read API key to the request URL, but do not
+  // publish that key in a public webpage.
+  const UPDATE_EVERY_MS = 20000;
+  const HISTORY_POINTS = 30;
+  const RING_LENGTH = 339.292;
+  const TEMP_MAX = 50;
+  const HUM_MAX = 100;
+
+  const $ = (id) => document.getElementById(id);
+  let latest = null;
+  let history = { temp: [], hum: [] };
+  let nextRefreshAt = Date.now() + UPDATE_EVERY_MS;
+
+  // Remember thresholds between visits (safe if storage is blocked).
+  try {
+    const t = localStorage.getItem("tempThreshold");
+    const h = localStorage.getItem("humidityThreshold");
+    if (t !== null) $("tempThreshold").value = t;
+    if (h !== null) $("humidityThreshold").value = h;
+  } catch (e) {}
+
+  function setLive(state, text) {
+    const el = $("live");
+    el.className = "live " + state;
+    $("liveText").textContent = text;
+  }
+
+  function sparkline(svgId, values, color) {
+    const svg = $(svgId);
+    if (values.length < 2) { svg.innerHTML = ""; return; }
+    const min = Math.min(...values), max = Math.max(...values);
+    const span = (max - min) || 1;
+    const pad = 6, w = 300, h = 70;
+    const pts = values.map((v, i) => {
+      const x = (i / (values.length - 1)) * w;
+      const y = h - pad - ((v - min) / span) * (h - pad * 2);
+      return [x, y];
+    });
+    const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+    const area = line + ` L ${w} ${h} L 0 ${h} Z`;
+    const gid = svgId + "Grad";
+    svg.innerHTML =
+      `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">` +
+      `<stop offset="0%" stop-color="${color}" stop-opacity="0.35"/>` +
+      `<stop offset="100%" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>` +
+      `<path d="${area}" fill="url(#${gid})"/>` +
+      `<path d="${line}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+  }
+
+  function render() {
+    const tempLimit = Number($("tempThreshold").value);
+    const humLimit = Number($("humidityThreshold").value);
+    $("tempOut").textContent = tempLimit + " °C";
+    $("humOut").textContent = humLimit + " %";
+    $("tempLimit").textContent = "Limit " + tempLimit + " °C";
+    $("humidityLimit").textContent = "Limit " + humLimit + " %";
+
+    if (!latest) return;
+    const { temperature, humidity } = latest;
+
+    $("tempValue").innerHTML = temperature.toFixed(1) + "<small>°C</small>";
+    $("humidityValue").innerHTML = humidity.toFixed(0) + "<small>%</small>";
+
+    $("tempRing").style.strokeDashoffset = RING_LENGTH * (1 - Math.min(Math.max(temperature / TEMP_MAX, 0), 1));
+    $("humRing").style.strokeDashoffset = RING_LENGTH * (1 - Math.min(Math.max(humidity / HUM_MAX, 0), 1));
+
+    const tempHigh = temperature > tempLimit;
+    const humidityHigh = humidity > humLimit;
+
+    $("tempCard").classList.toggle("high", tempHigh);
+    $("humidityCard").classList.toggle("high", humidityHigh);
+
+    $("tempStatus").className = "pill";
+    $("humidityStatus").className = "pill";
+    $("tempStatus").textContent = tempHigh ? "HIGH TEMPERATURE" : "NORMAL";
+    $("humidityStatus").textContent = humidityHigh ? "HIGH HUMIDITY" : "NORMAL";
+
+    sparkline("tempSpark", history.temp, tempHigh ? "#ff5470" : "#ffa94d");
+    sparkline("humSpark", history.hum, humidityHigh ? "#ff5470" : "#38bdf8");
+  }
+
+  async function updateReadings() {
+    const updated = $("updated");
+    nextRefreshAt = Date.now() + UPDATE_EVERY_MS;
+    try {
+      const url = `https://api.thingspeak.com/channels/${CHANNEL_ID}/feeds.json?results=${HISTORY_POINTS}`;
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const data = await response.json();
+
+      const valid = (data.feeds || [])
+        .map((f) => ({ t: Number(f.field1), h: Number(f.field2), at: f.created_at }))
+        .filter((f) => Number.isFinite(f.t) && Number.isFinite(f.h));
+
+      if (!valid.length) throw new Error("Missing or invalid field1/field2 data");
+
+      history.temp = valid.map((f) => f.t);
+      history.hum = valid.map((f) => f.h);
+      const last = valid[valid.length - 1];
+      latest = { temperature: last.t, humidity: last.h };
+
+      render();
+      setLive("on", "Live");
+      const timestamp = last.at ? new Date(last.at).toLocaleString() : "unknown";
+      updated.className = "footer";
+      updated.innerHTML = `Last reading: ${timestamp}<br><span id="countdown"></span>`;
+    } catch (error) {
+      setLive("err", "Offline");
+      updated.className = "footer";
+      updated.innerHTML = `<span class="err">Could not load readings: ${error.message}.</span><br>Check the Channel ID, public access, and internet connection.`;
+    }
+  }
+
+  function tickCountdown() {
+    const el = $("countdown");
+    if (!el) return;
+    const s = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
+    el.textContent = `Refreshing in ${s}s`;
+  }
+
+  ["tempThreshold", "humidityThreshold"].forEach((id) => {
+    $(id).addEventListener("input", () => {
+      try { localStorage.setItem(id, $(id).value); } catch (e) {}
+      render();
+    });
+  });
+
+  render();
+  updateReadings();
+  setInterval(updateReadings, UPDATE_EVERY_MS);
+  setInterval(tickCountdown, 1000);
+</script>
+</body>
+</html>
